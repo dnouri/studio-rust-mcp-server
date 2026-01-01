@@ -1,5 +1,14 @@
 # Roblox Studio MCP Server
 
+> **Fork of [Roblox/studio-rust-mcp-server](https://github.com/Roblox/studio-rust-mcp-server)**
+>
+> This fork adds:
+> - **Linux support** — run the MCP server on Linux ([#1](https://github.com/dnouri/studio-rust-mcp-server/pull/1))
+> - **Play-mode debugging** — query live game state during play, not just edit mode ([#2](https://github.com/dnouri/studio-rust-mcp-server/pull/2))
+> - **HTTP-only mode** — `--http-only` flag for custom tooling without MCP stdio
+
+---
+
 This repository contains a reference implementation of the Model Context Protocol (MCP) that enables
 communication between Roblox Studio via a plugin and [Claude Desktop](https://claude.ai/download) or [Cursor](https://www.cursor.com/).
 It consists of the following Rust-based components, which communicate through internal shared
