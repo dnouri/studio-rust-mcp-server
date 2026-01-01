@@ -11,17 +11,50 @@ local URI = "http://localhost:44755"
 local RECEIVE_ENDPOINT = "/request"
 local SEND_ENDPOINT = "/response"
 
-if RunService:IsRunning() then
+--------------------------------------------------------------------------------
+-- CONTEXT DETECTION
+-- Determine which DataModel we're running in: Edit, Server, or Client
+--------------------------------------------------------------------------------
+local function getContext(): string
+	if RunService:IsEdit() then
+		return "edit"
+	elseif RunService:IsRunning() then
+		if RunService:IsServer() and not RunService:IsClient() then
+			return "server"
+		elseif RunService:IsClient() and not RunService:IsServer() then
+			return "client"
+		else
+			-- Both IsServer and IsClient are true - "Run" mode, treat as server
+			return "server"
+		end
+	end
+	return "unknown"
+end
+
+local CONTEXT = getContext()
+print("[MCP Plugin] Running in context:", CONTEXT)
+
+-- Client-side plugins can't make HTTP requests during play mode
+-- Only proceed if we're in edit, server, or run mode
+if CONTEXT == "client" then
+	print("[MCP Plugin] Skipping client context (no HTTP allowed)")
 	return
 end
 
-local old_warn = warn
+--------------------------------------------------------------------------------
+-- LOGGING
+--------------------------------------------------------------------------------
+local ENABLE_LOGGING = true
+
 local function log(...)
-	if false then
-		old_warn(...)
+	if ENABLE_LOGGING then
+		print("[MCP " .. CONTEXT .. "]", ...)
 	end
 end
 
+--------------------------------------------------------------------------------
+-- TOOLS
+--------------------------------------------------------------------------------
 local function fetchBuiltinTools()
 	local tools = {}
 	for _, tool in Main.Tools:GetChildren() do
@@ -34,21 +67,25 @@ end
 
 local tools = fetchBuiltinTools()
 
+--------------------------------------------------------------------------------
+-- WEBSOCKET CLIENT
+--------------------------------------------------------------------------------
 local function connectWebSocket()
 	local client = MockWebSocketService:CreateClient(URI)
-	client:SetReceiveEndpoint(RECEIVE_ENDPOINT)
+	-- Include context in endpoint so server can route to correct DataModel
+	client:SetReceiveEndpoint(RECEIVE_ENDPOINT .. "?context=" .. CONTEXT)
 	client:SetSendEndpoint(SEND_ENDPOINT)
 
 	client.Opened:Once(function()
-		log("[MCP] Connection opened")
+		log("Connection opened")
 	end)
 
 	client.Closed:Once(function()
-		log("[MCP] Connection closed")
+		log("Connection closed")
 	end)
 
 	client.MessageReceived:Connect(function(message)
-		log("[MCP] Message received")
+		log("Message received")
 
 		local body = HttpService:JSONDecode(message)
 		assert(body and body.id and body.args, "Invalid message received")
@@ -57,17 +94,23 @@ local function connectWebSocket()
 		local responseSent = false
 		local function sendResponseOnce(response: string)
 			if not responseSent then
-				log("[MCP] Sending response:" .. response)
+				log("Sending response:", string.sub(response, 1, 100))
 				responseSent = true
 				client:Send({
 					id = id,
 					response = response,
+					context = CONTEXT, -- Include our context in response
 				})
 			end
 		end
 
 		local args: Types.ToolArgs = body.args
-		local recording = ChangeHistoryService:TryBeginRecording("StudioMCP")
+
+		-- Only use ChangeHistoryService in edit mode
+		local recording = nil
+		if CONTEXT == "edit" then
+			recording = ChangeHistoryService:TryBeginRecording("StudioMCP")
+		end
 
 		for _, tool in tools do
 			local success, response = pcall(tool, args)
@@ -84,12 +127,15 @@ local function connectWebSocket()
 		end
 
 		sendResponseOnce("No tool found to handle request")
-		log("[MCP] Successfully handled request")
+		log("Successfully handled request")
 	end)
 
 	return client
 end
 
+--------------------------------------------------------------------------------
+-- UI (Edit mode only)
+--------------------------------------------------------------------------------
 local function getButtonImage()
 	local ok, response = pcall(function()
 		return StudioService:GetClassIcon("PackageLink").Image
@@ -97,9 +143,24 @@ local function getButtonImage()
 	return ok and response or "rbxasset://textures/ui/GuiImagePlaceholder.png"
 end
 
-local currentClient: MockWebSocketService.MockWebSocketClient? = connectWebSocket() -- nil for default off
-print("The MCP Studio plugin is ready for prompts.")
+-- Auto-connect in all modes
+local currentClient: MockWebSocketService.MockWebSocketClient? = nil
 
+local function tryConnect()
+	local success, result = pcall(function()
+		return connectWebSocket()
+	end)
+	if success then
+		currentClient = result
+		print("[MCP Plugin] Connected in", CONTEXT, "mode - ready for prompts.")
+	else
+		warn("[MCP Plugin] Failed to connect:", result)
+	end
+end
+
+tryConnect()
+
+-- Toolbar available in all modes
 local toolbar = plugin:CreateToolbar("MCP")
 local toggleButton = toolbar:CreateButton("Toggle MCP", "Toggle connection to the server", getButtonImage())
 toggleButton.ClickableWhenViewportHidden = true
@@ -107,11 +168,12 @@ toggleButton:SetActive(currentClient ~= nil)
 
 toggleButton.Click:Connect(function()
 	if not currentClient then
-		currentClient = connectWebSocket()
-		print("The MCP Studio plugin is ready for prompts.")
+		tryConnect()
+		toggleButton:SetActive(currentClient ~= nil)
 	else
 		currentClient:Close()
 		currentClient = nil
-		print("The MCP Studio plugin is stopped.")
+		toggleButton:SetActive(false)
+		print("[MCP Plugin] Disconnected.")
 	end
 end)
