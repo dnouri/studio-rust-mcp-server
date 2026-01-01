@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Build server
         run: |
           cargo install cargo-edit
           cargo set-version --workspace "$CARGO_PKG_VERSION"
@@ -72,11 +72,24 @@ jobs:
           mkdir -p output
           cp target/release/rbx-studio-mcp output/
           cd output && zip rbx-studio-mcp-linux.zip rbx-studio-mcp
-      - name: Upload artifact
+      - name: Build plugin
+        run: |
+          # Download rojo
+          curl -sL https://github.com/rojo-rbx/rojo/releases/download/v7.4.4/rojo-7.4.4-linux-x86_64.zip -o rojo.zip
+          unzip rojo.zip
+          chmod +x rojo
+          # Build plugin
+          ./rojo build plugin -o output/MCPStudioPlugin.rbxm
+      - name: Upload server artifact
         uses: actions/upload-artifact@v4
         with:
           name: Linux-rbx-studio-mcp
           path: output/rbx-studio-mcp-linux.zip
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MCPStudioPlugin
+          path: output/MCPStudioPlugin.rbxm
 
   release:
     runs-on: ubuntu-latest
