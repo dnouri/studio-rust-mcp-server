@@ -101,6 +101,97 @@ local function runCodeWithOutput(command: string): string
 			addToOutput("[ERROR]", ...)
 		end
 
+		-- Find MCPBridge if it exists
+		local ServerScriptService = game:GetService("ServerScriptService")
+		local mcpBridge = nil
+		for _, child in ServerScriptService:GetChildren() do
+			if child:IsA("BindableFunction") and child.Name == "MCPBridge" then
+				mcpBridge = child
+				break
+			end
+		end
+
+		-- Helper: create a proxy that forwards calls through the bridge
+		local function createModuleProxy(modulePath: string)
+			local propertyCache = {} -- Cache which keys are properties vs functions
+
+			return setmetatable({}, {
+				__index = function(_, key)
+					-- Check cache first
+					if propertyCache[key] == "property" then
+						-- Known property: fetch and return value directly
+						local result = mcpBridge:Invoke(modulePath, key)
+						if typeof(result) == "table" and result.success then
+							return result.result
+						end
+						return nil
+					elseif propertyCache[key] == "function" then
+						-- Known function: return callable
+						return function(...)
+							local result = mcpBridge:Invoke(modulePath, key, ...)
+							if typeof(result) == "table" and result.success ~= nil then
+								if not result.success then
+									oldError("[MCP] " .. (result.error or "Unknown error"))
+									return nil
+								end
+								return result.result
+							end
+							return result
+						end
+					end
+
+					-- First access: probe bridge to determine type WITHOUT calling functions
+					local probeResult = mcpBridge:Invoke("_getType", modulePath, key)
+					if typeof(probeResult) == "table" and probeResult.success then
+						if probeResult.isProperty then
+							-- It's a property, cache type and fetch value
+							propertyCache[key] = "property"
+							local valueResult = mcpBridge:Invoke(modulePath, key)
+							if typeof(valueResult) == "table" and valueResult.success then
+								return valueResult.result
+							end
+							return nil
+						else
+							-- It's a function, cache and return callable
+							propertyCache[key] = "function"
+							return function(...)
+								local result = mcpBridge:Invoke(modulePath, key, ...)
+								if typeof(result) == "table" and result.success ~= nil then
+									if not result.success then
+										oldError("[MCP] " .. (result.error or "Unknown error"))
+										return nil
+									end
+									return result.result
+								end
+								return result
+							end
+						end
+					elseif typeof(probeResult) == "table" and not probeResult.success then
+						oldError("[MCP] " .. (probeResult.error or "Unknown error"))
+					end
+					return nil
+				end,
+			})
+		end
+
+		-- Override require() to transparently use MCPBridge for game modules
+		local oldRequire = require
+		chunkfenv.require = function(module)
+			if typeof(module) == "Instance" and mcpBridge then
+				local path = module:GetFullName()
+				-- Game modules go through the bridge
+				if
+					path:match("^ReplicatedStorage")
+					or path:match("^ServerScriptService")
+					or path:match("^ServerStorage")
+				then
+					return createModuleProxy(path)
+				end
+			end
+			-- Non-game modules or no bridge: use regular require
+			return oldRequire(module)
+		end
+
 		local results = table.pack(chunk())
 		if #results > 0 then
 			addToOutput("[RETURNED RESULTS]", table.unpack(results))

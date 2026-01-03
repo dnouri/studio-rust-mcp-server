@@ -108,3 +108,39 @@ sometimes is hidden in the system tray, so ensure you've exited it completely.
 1. Type a prompt in Claude Desktop and accept any permissions to communicate with Studio.
 1. Verify that the intended action is performed in Studio by checking the console, inspecting the
    data model in Explorer, or visually confirming the desired changes occurred in your place.
+
+## Accessing Game Module State
+
+### The Problem
+
+Roblox plugins run in a **separate Luau VM** from game scripts. Normally, `require()` from plugin code returns different module instances than game scripts use, so you can't read or modify game state.
+
+### The Solution: Transparent require()
+
+If your game includes `MCPBridge.server.luau`, `require()` works transparently:
+
+```luau
+-- This just works! No special syntax needed.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PlayerDataManager = require(ReplicatedStorage.Shared.PlayerDataManager)
+
+-- Read game state
+local coins = PlayerDataManager.getCoins({_playerRef = "PlayerName"})
+
+-- Modify game state  
+PlayerDataManager.setCoins({_playerRef = "PlayerName"}, 5000)
+
+-- Access module properties
+local Constants = require(ReplicatedStorage.Shared.Constants)
+print(Constants.Events.PlayerDataChanged)
+```
+
+**Player references:** Since Player objects can't cross the VM boundary, use `{_playerRef = "PlayerName"}` for player arguments.
+
+### Setup: Add MCPBridge to Your Game
+
+Add this script to your game at `src/server/MCPBridge.server.luau`:
+
+See the full implementation at: https://github.com/badooga/roblox-pi-template/blob/main/src/server/MCPBridge.server.luau
+
+The bridge provides a BindableFunction that the MCP plugin uses automatically when you call `require()` on game modules.
